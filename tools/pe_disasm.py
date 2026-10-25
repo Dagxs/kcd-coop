@@ -1,8 +1,8 @@
 """Small PE64 helpers for targeted reverse engineering.
 
-  python3 -I re.py <pe> callers <rva> [<rva> ...]   direct E8/E9 calls/jumps to each RVA
-  python3 -I re.py <pe> dis <rva> [count]           disassemble the function containing RVA
-  python3 -I re.py <pe> func <rva>                  print .pdata function range for RVA
+  python3 -I pe_disasm.py <pe> callers <rva> [<rva> ...]   direct E8/E9 calls/jumps to each RVA
+  python3 -I pe_disasm.py <pe> dis <rva> [count]           disassemble the function containing RVA
+  python3 -I pe_disasm.py <pe> func <rva>                  print .pdata function range for RVA
 """
 import bisect
 import re

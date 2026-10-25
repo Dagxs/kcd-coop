@@ -15,7 +15,7 @@ offsets and test results: `games/kingdom-come-deliverance/NOTES.md` in
 - The other player appears as a stand-in character that moves smoothly and switches between idle,
   walk and run animations depending on speed.
 - The stand-in is a real NPC made to look like Henry (his head, hair and current clothes), with its
-  AI brain switched off so only the other player's data moves it (`lua/coop_npc_puppet.lua`).
+  AI brain switched off so only the other player's data moves it (`lua/coop_core.lua`).
 
 QA level: manual (owner-observed, loader logs). No automated tests yet.
 
@@ -62,7 +62,9 @@ Remove `dinput8.dll` to uninstall.
   - reads data back through a console variable that Lua writes;
   - sends and receives positions over UDP, smooths them, and calls Lua `CoopSetRemote(x, y, z, rot, speed)`;
   - runs `kcdcoop_cmd_A.lua` / `kcdcoop_cmd_B.lua` dropped into the game root (live scripting for development).
-- `lua/coop_animate.lua`: picks idle / walk / run for the stand-in from the remote player's speed.
+- `lua/coop_core.lua`: the game-side half, embedded into the DLL at build time: spawns the stand-in as an
+  NPC with Henry's look and its AI brain off, moves it (`CoopSetRemote`), and picks idle / walk / run from
+  the remote player's speed. Other files in `lua/` are one-off exploration jobs for the command file.
 - `tools/`: small PE analysis helpers (string and data cross-references, disassembly) used to find the offsets.
 
 ## Build

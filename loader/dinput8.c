@@ -1,7 +1,7 @@
 // KCD1 co-op loader (coop-anything). Proxy dinput8.dll placed next to KingdomCome.exe in a TEST COPY.
 // Build target: KCD 1.9.8 Steam, WHGame.dll SHA-256 cf9f6dc384edcf35c20647a912745ddb8adb5ba65953e329c24e89dd9c4381aa
 //
-// v3.1: script bridge + puppet + UDP position sync between two games.
+// v3.2: script bridge + puppet + UDP position sync between two games.
 //  - DLL -> game: CXConsole::ExecuteString(cmd, silent, defer=true) with "#<lua>" commands
 //    (deferred, so the game runs them on its main thread next frame).
 //  - game -> DLL: Lua writes a string into a console variable; DLL reads it via ICVar::GetString.
@@ -137,31 +137,9 @@ static const char *kPublishLua =
     "System.SetCVar('cl_serveraddr', string.format('P %.2f %.2f %.2f %.3f', p.x, p.y, p.z, a.z)) "
     "else System.SetCVar('cl_serveraddr', 'noplayer') end";
 
-// Puppet (stand-in for the remote player). Defined once; CoopSetRemote() moves it, respawning it
-// if the level was reloaded. For the solo test, CoopFakeFollow() feeds it the local player's
-// position shifted 2 m sideways. No semicolons: the console treats ';' as a command separator.
-static const char *kPuppetLua =
-    "if not CoopSetRemote then "
-    "function CoopEnsurePuppet(x,y,z) "
-    "  if CoopP and CoopP.id and System.GetEntity(CoopP.id) then return CoopP end "
-    "  local e = System.SpawnEntity({class='BasicEntity', name='coop_puppet', position={x=x,y=y,z=z}}) "
-    "  if not e then System.LogAlways('[coop] puppet spawn FAILED') CoopP=nil return nil end "
-    "  local ok = pcall(function() e:LoadCharacter(0, 'objects/characters/humans/skeleton/male.cdf') end) "
-    "  System.LogAlways('[coop] puppet spawned id=' .. tostring(e.id) .. ' character=' .. tostring(ok)) "
-    "  CoopP = e CoopAnimCur = nil return e "
-    "end "
-    "function CoopSetRemote(x,y,z,rz,spd) "
-    "  local e = CoopEnsurePuppet(x,y,z) if not e then return end "
-    "  e:SetWorldPos({x=x,y=y,z=z}) e:SetWorldAngles({x=0,y=0,z=rz}) "
-    "  if CoopAnimate then pcall(CoopAnimate, e, spd or 0) end "
-    "end "
-    "function CoopFakeFollow() "
-    "  if not player then return end "
-    "  local p = player:GetWorldPos() local a = player:GetWorldAngles() "
-    "  CoopSetRemote(p.x + 2, p.y, p.z, a.z, 0) "
-    "end "
-    "System.LogAlways('[coop] puppet functions defined') "
-    "end";
+// Game-side half (puppet NPC, Henry look, animation, CoopSetRemote) lives in lua/coop_core.lua,
+// embedded at build time as kCoreLua. It only defines what is missing, so it is safe to re-run.
+#include "coop_core_lua.h"
 
 // ---------------- transport (plain UDP, v3) ----------------
 // Defaults for two copies on one PC: A binds 64200 and sends to 127.0.0.1:64201, B the reverse.
@@ -224,7 +202,7 @@ static DWORD WINAPI worker(LPVOID unused) {
     void *cr = cvar("con_restricted");
     if (cr) { cvar_set(cr, "0"); coop_log("con_restricted -> %s", cvar_str(cr)); }
     run_lua("System.LogAlways('[coop] hello from the kcdcoop loader')");
-    run_lua(kPuppetLua);
+    run_lua(kCoreLua);
     int fake = GetFileAttributesA("kcdcoop_fake") != INVALID_FILE_ATTRIBUTES;
     coop_log("fake follow test: %s", fake ? "on" : "off");
 
@@ -245,7 +223,7 @@ static DWORD WINAPI worker(LPVOID unused) {
 
     for (int tick = 0;; tick++) {
         Sleep(33);
-        if (tick % 150 == 0) run_lua(kPuppetLua);  // defines the puppet functions if missing
+        if (tick % 150 == 0) run_lua(kCoreLua);  // (re)defines the core functions if missing
 
         // 0) command file: run a one-off Lua chunk dropped into the game root, then delete it
         if (tick % 15 == 0) {
@@ -354,7 +332,7 @@ BOOL WINAPI DllMain(HINSTANCE h, DWORD reason, LPVOID r) {
         GetModuleFileNameA(NULL, exe, MAX_PATH);
         const char *b = strrchr(exe, '\\'); b = b ? b + 1 : exe;
         if (_stricmp(b, "KingdomCome2.exe") == 0) g_role = 'B';
-        coop_log("kcdcoop loader v3.1 attached (%s)", b);
+        coop_log("kcdcoop loader v3.2 attached (%s)", b);
         HANDLE t = CreateThread(NULL, 0, worker, NULL, 0, NULL);
         if (t) CloseHandle(t);
     }

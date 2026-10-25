@@ -1,3 +1,4 @@
 loader/dinput8.dll
 __pycache__/
 *.log
+loader/coop_core_lua.h
