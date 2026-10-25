@@ -16,13 +16,14 @@ offsets and test results: `games/kingdom-come-deliverance/NOTES.md` in
   walk and run animations depending on speed.
 - The stand-in is a real NPC made to look like Henry (his head, hair and current clothes), with its
   AI brain switched off so only the other player's data moves it (`lua/coop_core.lua`).
+- Gear matching: the stand-in wears the other player's actual clothes and armour, updated within ~2 s
+  when they change (worn items are read from the engine's equipment handler; see NOTES).
 
 QA level: manual (owner-observed, loader logs). No automated tests yet.
 
 ## What doesn't (yet)
 
-- The stand-in copies the LOCAL player's clothes, not the remote player's gear (no equipment sync yet).
-- Only position, facing and walk/run state are shared. No combat, NPCs, items, quests or story.
+- Shared: position, facing, walk/run state and worn gear. No weapons in hand, combat, NPCs, quests or story.
 - Direct UDP only (same PC or LAN, or port forwarding). Steam relay is planned.
 - Only one game build is supported (below). The loader checks every address and does nothing on a mismatch.
 
