@@ -1,7 +1,7 @@
 // KCD1 co-op loader (coop-anything). Proxy dinput8.dll placed next to KingdomCome.exe in a TEST COPY.
 // Build target: KCD 1.9.8 Steam, WHGame.dll SHA-256 cf9f6dc384edcf35c20647a912745ddb8adb5ba65953e329c24e89dd9c4381aa
 //
-// v3.2: script bridge + puppet + UDP position sync between two games.
+// v3.4: script bridge + puppet + UDP position sync between two games.
 //  - DLL -> game: CXConsole::ExecuteString(cmd, silent, defer=true) with "#<lua>" commands
 //    (deferred, so the game runs them on its main thread next frame).
 //  - game -> DLL: Lua writes a string into a console variable; DLL reads it via ICVar::GetString.
@@ -140,6 +140,72 @@ static const char *kPublishLua =
 // Game-side half (puppet NPC, Henry look, animation, CoopSetRemote) lives in lua/coop_core.lua,
 // embedded at build time as kCoreLua. It only defines what is missing, so it is safe to re-run.
 #include "coop_core_lua.h"
+static void run_lua(const char *lua);
+static void run_core(void) { for (int i = 0; i < CORE_LUA_CHUNKS; i++) run_lua(kCoreLua[i]); }
+
+// ---------------- gear (v3.4) ----------------
+// The engine's internal equip routine (C_ActorEquipmentHandler-like object in rcx, item WUID in rdx).
+// Worn clothing is an MSVC std::unordered_set<WUID> at handler+0x10 (list head at +0x18, size at +0x20,
+// nodes {next, prev, wuid}); equip inserts into it, unequip erases (see NOTES.md).
+#define RVA_EQUIP_INTERNAL 0x44D6C8u
+static const unsigned char kEquipPrologue[17] = {0x48,0x8B,0xC4,0x48,0x89,0x58,0x08,0x48,0x89,0x70,0x18,
+                                                 0x48,0x89,0x78,0x20,0x41,0x56};
+typedef unsigned long long (*EquipFn)(void *handler, unsigned long long wuid, unsigned long long r8, unsigned long long r9);
+static EquipFn g_equip_tramp = NULL;
+static volatile unsigned long long g_probe_wuid = 0;
+static void *volatile g_player_handler = NULL;
+
+static unsigned long long hook_equip_internal(void *h, unsigned long long w, unsigned long long a3, unsigned long long a4) {
+    if (g_probe_wuid && w == g_probe_wuid) { g_player_handler = h; g_probe_wuid = 0; }
+    return g_equip_tramp(h, w, a3, a4);
+}
+
+// Gear lists come from the network: allow only item-class GUID characters before they go into Lua.
+static int gear_list_safe(const char *g) {
+    for (; *g; g++) if (!((*g >= '0' && *g <= '9') || (*g >= 'a' && *g <= 'f') || (*g >= 'A' && *g <= 'F') || *g == '-' || *g == ',')) return 0;
+    return 1;
+}
+
+static int install_equip_hook(void) {
+    unsigned char *target = g_base + RVA_EQUIP_INTERNAL;
+    if (memcmp(target, kEquipPrologue, sizeof(kEquipPrologue)) != 0) { coop_log("equip hook: prologue mismatch, gear sync off"); return 0; }
+    unsigned char *tr = (unsigned char *)VirtualAlloc(NULL, 64, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+    if (!tr) return 0;
+    memcpy(tr, target, 17);                                  // relocatable: no rip-relative operands
+    tr[17] = 0xFF; tr[18] = 0x25; memset(tr + 19, 0, 4);      // jmp [rip+0]
+    unsigned long long back = (unsigned long long)(target + 17);
+    memcpy(tr + 23, &back, 8);
+    g_equip_tramp = (EquipFn)tr;
+    unsigned char patch[17];
+    patch[0] = 0xFF; patch[1] = 0x25; memset(patch + 2, 0, 4);
+    unsigned long long hk = (unsigned long long)hook_equip_internal;
+    memcpy(patch + 6, &hk, 8);
+    patch[14] = patch[15] = patch[16] = 0x90;
+    DWORD old;
+    if (!VirtualProtect(target, 17, PAGE_EXECUTE_READWRITE, &old)) return 0;
+    memcpy(target, patch, 17);
+    VirtualProtect(target, 17, old, &old);
+    FlushInstructionCache(GetCurrentProcess(), target, 17);
+    coop_log("equip hook installed at +%#x", RVA_EQUIP_INTERNAL);
+    return 1;
+}
+
+static int readable(const void *p, size_t n);
+static int read_worn(unsigned long long *out, int max) {
+    unsigned char *h = (unsigned char *)g_player_handler;
+    if (!h || !readable(h + 0x10, 0x18)) return -1;
+    void **head = *(void ***)(h + 0x18);
+    unsigned long long n = *(unsigned long long *)(h + 0x20);
+    if (n > 64 || !readable(head, 0x18)) return -1;
+    int c = 0;
+    void **node = (void **)head[0];
+    while (node && node != head && c < max) {
+        if (!readable(node, 0x18)) return -1;
+        out[c++] = *(unsigned long long *)((unsigned char *)node + 0x10);
+        node = (void **)node[0];
+    }
+    return c;
+}
 
 // ---------------- transport (plain UDP, v3) ----------------
 // Defaults for two copies on one PC: A binds 64200 and sends to 127.0.0.1:64201, B the reverse.
@@ -202,7 +268,8 @@ static DWORD WINAPI worker(LPVOID unused) {
     void *cr = cvar("con_restricted");
     if (cr) { cvar_set(cr, "0"); coop_log("con_restricted -> %s", cvar_str(cr)); }
     run_lua("System.LogAlways('[coop] hello from the kcdcoop loader')");
-    run_lua(kCoreLua);
+    run_core();
+    int gear_ok = install_equip_hook();
     int fake = GetFileAttributesA("kcdcoop_fake") != INVALID_FILE_ATTRIBUTES;
     coop_log("fake follow test: %s", fake ? "on" : "off");
 
@@ -220,10 +287,12 @@ static DWORD WINAPI worker(LPVOID unused) {
     float speed = 0;
     char cmdfile[32];
     snprintf(cmdfile, sizeof(cmdfile), "kcdcoop_cmd_%c.lua", g_role);
+    static char myGear[1200] = "", lastWornHex[1200] = "", remoteGear[1200] = "", appliedGear[1200] = "";
+    int haveMyGear = 0, probes = 0;
 
     for (int tick = 0;; tick++) {
         Sleep(33);
-        if (tick % 150 == 0) run_lua(kCoreLua);  // (re)defines the core functions if missing
+        if (tick % 150 == 0) run_core();  // (re)defines the core functions if missing
 
         // 0) command file: run a one-off Lua chunk dropped into the game root, then delete it
         if (tick % 15 == 0) {
@@ -258,7 +327,7 @@ static DWORD WINAPI worker(LPVOID unused) {
 
         // 2) drain incoming packets, keep the newest valid one
         if (s != INVALID_SOCKET) {
-            char buf[256];
+            static char buf[1400];
             for (;;) {
                 int n = recv(s, buf, sizeof(buf) - 1, 0);
                 if (n <= 0) break;
@@ -275,7 +344,21 @@ static DWORD WINAPI worker(LPVOID unused) {
                     tx = x; ty = y; tz = z; tr = r; haveTarget = 1; recvd++;
                     lastRecvTick = now;
                     strncpy(lastRemote, buf + 9, sizeof(lastRemote) - 1);
+                } else if (strncmp(buf, "KCDCOOP1 G", 10) == 0) {
+                    const char *g = buf + 10;
+                    if (*g == ' ') g++;
+                    if (gear_list_safe(g)) { strncpy(remoteGear, g, sizeof(remoteGear) - 1); recvd++; }
+                    else bad++;
                 } else bad++;
+            }
+        }
+        if (remoteGear[0] || strcmp(remoteGear, appliedGear) != 0) {
+            if (strcmp(remoteGear, appliedGear) != 0) {
+                static char lua[1400];
+                snprintf(lua, sizeof(lua), "CoopDressRemote('%s')", remoteGear);
+                run_lua(lua);
+                strcpy(appliedGear, remoteGear);
+                coop_log("gear: dressing stand-in with [%s]", remoteGear);
             }
         }
 
@@ -298,6 +381,54 @@ static DWORD WINAPI worker(LPVOID unused) {
             run_lua(lua);
         } else if (fake && tick % 3 == 0) {
             run_lua("CoopFakeFollow()");
+        }
+
+        // 4) gear: find the player's equipment handler once (probe), then report worn items each second
+        if (gear_ok && !g_player_handler && probes < 5) {
+            if (tick % 60 == 10) run_lua("CoopProbePublish()");
+            if (tick % 60 == 20) {
+                void *sv = cvar("sv_servername");
+                unsigned long long w = 0;
+                if (sv && sscanf(cvar_str(sv), "W userdata: %llx", &w) == 1 && w) {
+                    g_probe_wuid = w;
+                    run_lua("CoopProbeEquip()");
+                    if (++probes == 5) coop_log("gear: probe did not find the equipment handler, gear sync off");
+                }
+            }
+            if (tick % 60 == 30 && g_player_handler) coop_log("gear: player equipment handler %p", g_player_handler);
+        } else if (gear_ok && g_player_handler) {
+            if (tick % 30 == 5) {
+                unsigned long long worn[64];
+                int n = read_worn(worn, 64);
+                if (n >= 0) {
+                    char hex[1200] = "";
+                    size_t len = 0;
+                    for (int i = 0; i < n && len < sizeof(hex) - 20; i++) len += snprintf(hex + len, sizeof(hex) - len, "%llx ", worn[i]);
+                    if (strcmp(hex, lastWornHex) != 0 || !haveMyGear) {
+                        static char lua[1400];
+                        snprintf(lua, sizeof(lua), "CoopReportWorn('%s')", hex);
+                        run_lua(lua);
+                        strcpy(lastWornHex, hex);
+                    }
+                } else if (tick % 300 == 5) coop_log("gear: worn set unreadable");
+            }
+            if (tick % 30 == 12) {
+                void *sv = cvar("sv_servername");
+                const char *v = sv ? cvar_str(sv) : NULL;
+                if (v && v[0] == 'G' && (v[1] == ' ' || v[1] == 0)) {
+                    const char *g = v[1] ? v + 2 : v + 1;
+                    if (strcmp(g, myGear) != 0 || !haveMyGear) {
+                        strncpy(myGear, g, sizeof(myGear) - 1);
+                        haveMyGear = 1;
+                        coop_log("gear: wearing [%s]", myGear);
+                    }
+                }
+            }
+        }
+        if (haveMyGear && s != INVALID_SOCKET && tick % 60 == 40) {  // (re)send gear every 2 s
+            static char pkt[1300];
+            int n = snprintf(pkt, sizeof(pkt), "KCDCOOP1 G %s", myGear);
+            if (n > 0 && n < (int)sizeof(pkt)) sendto(s, pkt, n, 0, (struct sockaddr *)&peer, sizeof(peer));
         }
 
         if (tick % 150 == 0)
@@ -332,7 +463,7 @@ BOOL WINAPI DllMain(HINSTANCE h, DWORD reason, LPVOID r) {
         GetModuleFileNameA(NULL, exe, MAX_PATH);
         const char *b = strrchr(exe, '\\'); b = b ? b + 1 : exe;
         if (_stricmp(b, "KingdomCome2.exe") == 0) g_role = 'B';
-        coop_log("kcdcoop loader v3.2 attached (%s)", b);
+        coop_log("kcdcoop loader v3.4 attached (%s)", b);
         HANDLE t = CreateThread(NULL, 0, worker, NULL, 0, NULL);
         if (t) CloseHandle(t);
     }

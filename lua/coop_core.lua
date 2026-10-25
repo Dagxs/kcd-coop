@@ -1,10 +1,7 @@
 -- coop_core.lua: game-side half of kcd-coop. Embedded into dinput8.dll at build time (tools/embed_lua.py)
 -- and run through the console, so: no Lua line comments after code on the same line (lines are joined).
--- Only defines things that are missing, so live overrides sent through command files survive.
-
-if not CoopCoreVersion then
-
-CoopCoreVersion = 1
+-- tools/embed_lua.py splits it into chunks at blank lines and wraps each in a version guard, so re-running
+-- it is a no-op once CoopCoreVersion is current (set by the last chunk).
 
 CoopLook = {
   soul = '43144483-f3bb-fab8-9ceb-f77e3020598a',
@@ -30,11 +27,70 @@ function CoopEnsurePuppet(x, y, z)
   try('look soul', function() e.actor:MakeLookAsSoul(CoopLook.soul) end)
   try('head', function() e.soul:OverrideHead(CoopLook.head) end)
   try('hair', function() e.soul:OverrideHair(CoopLook.hair) end)
-  if player then try('clothes', function() e.actor:MakeLookAsActor(player.id) end) end
+  if not CoopGearLast and player then try('clothes', function() e.actor:MakeLookAsActor(player.id) end) end
   System.LogAlways('[coop] puppet spawned id=' .. tostring(e.id))
   CoopP = e
   CoopAnimCur = nil
+  CoopGearItems = {}
+  if CoopGearLast then CoopDressRemote(CoopGearLast) end
   return e
+end
+
+function CoopProbePublish()
+  if not player then return end
+  local pick = nil
+  for k, v in pairs(player.inventory:GetInventoryTable() or {}) do
+    local nm = ''
+    pcall(function() nm = tostring(ItemManager.GetItemName(ItemManager.GetItem(v).class)) end)
+    if not pick or string.find(nm, 'keyring') then pick = v end
+  end
+  CoopProbeItem = pick
+  if pick then System.SetCVar('sv_servername', 'W ' .. tostring(pick)) end
+end
+
+function CoopProbeEquip()
+  if player and CoopProbeItem then player.actor:EquipInventoryItem(CoopProbeItem) end
+end
+
+function CoopReportWorn(hexlist)
+  if not player then return end
+  local want = {}
+  for h in string.gmatch(hexlist, '%x+') do want[string.lower(h)] = true end
+  local classes = {}
+  for k, v in pairs(player.inventory:GetInventoryTable() or {}) do
+    local key = string.lower(string.match(tostring(v), '(%x+)$') or '')
+    key = string.gsub(key, '^0+', '')
+    if want[key] then
+      local it = ItemManager.GetItem(v)
+      if it then classes[#classes + 1] = it.class end
+    end
+  end
+  table.sort(classes)
+  System.SetCVar('sv_servername', 'G ' .. table.concat(classes, ','))
+end
+
+function CoopDressRemote(list)
+  CoopGearLast = list
+  local e = CoopP
+  if not e or not e.id or not System.GetEntity(e.id) then return end
+  for _, id in ipairs(CoopGearItems or {}) do
+    pcall(function() e.actor:UnequipInventoryItem(id) end)
+    pcall(function() e.inventory:DeleteItem(id, 1) end)
+  end
+  CoopGearItems = {}
+  pcall(function() e.actor:MakeLookAsSoul(CoopLook.soul) end)
+  pcall(function() e.soul:OverrideHead(CoopLook.head) end)
+  pcall(function() e.soul:OverrideHair(CoopLook.hair) end)
+  local n = 0
+  for cls in string.gmatch(list, '[^,]+') do
+    local okc, id = pcall(function() return e.inventory:CreateItem(cls, 1, 1) end)
+    if okc and id then
+      pcall(function() e.actor:EquipInventoryItem(id) end)
+      CoopGearItems[#CoopGearItems + 1] = id
+      n = n + 1
+    end
+  end
+  System.LogAlways('[coop] dressed remote with ' .. n .. ' items')
 end
 
 function CoopAnimate(e, spd)
@@ -71,6 +127,5 @@ function CoopFakeFollow()
   CoopSetRemote(p.x + 2, p.y, p.z, a.z, 0)
 end
 
-System.LogAlways('[coop] core v1 defined')
-
-end
+CoopCoreVersion = 2
+System.LogAlways('[coop] core v2 defined')
