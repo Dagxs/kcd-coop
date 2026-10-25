@@ -14,12 +14,14 @@ offsets and test results: `games/kingdom-come-deliverance/NOTES.md` in
 - Each game sends its player's position to the other about 10 times a second over UDP.
 - The other player appears as a stand-in character that moves smoothly and switches between idle,
   walk and run animations depending on speed.
+- The stand-in is a real NPC made to look like Henry (his head, hair and current clothes), with its
+  AI brain switched off so only the other player's data moves it (`lua/coop_npc_puppet.lua`).
 
 QA level: manual (owner-observed, loader logs). No automated tests yet.
 
 ## What doesn't (yet)
 
-- The stand-in looks like the game's base male model, not Henry.
+- The stand-in copies the LOCAL player's clothes, not the remote player's gear (no equipment sync yet).
 - Only position, facing and walk/run state are shared. No combat, NPCs, items, quests or story.
 - Direct UDP only (same PC or LAN, or port forwarding). Steam relay is planned.
 - Only one game build is supported (below). The loader checks every address and does nothing on a mismatch.
