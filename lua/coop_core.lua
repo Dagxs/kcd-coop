@@ -124,12 +124,20 @@ function CoopAnimate(e, spd)
   end
 end
 
-function CoopSetRemote(x, y, z, rz, spd)
+function CoopSetRemote(x, y, z, rz, spd, drawn)
   local e = CoopEnsurePuppet(x, y, z)
   if not e then return end
   e:SetWorldPos({x = x, y = y, z = z})
   e:SetWorldAngles({x = 0, y = 0, z = rz})
-  pcall(CoopAnimate, e, spd or 0)
+  if drawn ~= nil and (drawn ~= CoopDrawnCur or CoopDrawnEnt ~= e.id) then
+    CoopDrawnCur = drawn
+    CoopDrawnEnt = e.id
+    local okd, er = pcall(function()
+      if drawn == 1 then e.human:DrawWeapon() else e.human:HolsterWeapon() end
+    end)
+    System.LogAlways('[coop] remote weapon ' .. (drawn == 1 and 'drawn' or 'holstered') .. ' ok=' .. tostring(okd) .. (okd and '' or (' ' .. tostring(er))))
+  end
+  if drawn ~= 1 then pcall(CoopAnimate, e, spd or 0) end
 end
 
 function CoopFakeFollow()
@@ -139,5 +147,5 @@ function CoopFakeFollow()
   CoopSetRemote(p.x + 2, p.y, p.z, a.z, 0)
 end
 
-CoopCoreVersion = 3
-System.LogAlways('[coop] core v3 defined')
+CoopCoreVersion = 4
+System.LogAlways('[coop] core v4 defined')

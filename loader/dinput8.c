@@ -1,7 +1,7 @@
 // KCD1 co-op loader (coop-anything). Proxy dinput8.dll placed next to KingdomCome.exe in a TEST COPY.
 // Build target: KCD 1.9.8 Steam, WHGame.dll SHA-256 cf9f6dc384edcf35c20647a912745ddb8adb5ba65953e329c24e89dd9c4381aa
 //
-// v3.4: script bridge + puppet + UDP position sync between two games.
+// v3.5: script bridge + puppet + UDP position sync between two games.
 //  - DLL -> game: CXConsole::ExecuteString(cmd, silent, defer=true) with "#<lua>" commands
 //    (deferred, so the game runs them on its main thread next frame).
 //  - game -> DLL: Lua writes a string into a console variable; DLL reads it via ICVar::GetString.
@@ -134,7 +134,8 @@ static void run_lua(const char *lua) {  // deferred: executes on the game's main
 // cl_serveraddr is unused in single player (it is the "connect to" address).
 static const char *kPublishLua =
     "if player then local p=player:GetWorldPos(); local a=player:GetWorldAngles(); "
-    "System.SetCVar('cl_serveraddr', string.format('P %.2f %.2f %.2f %.3f', p.x, p.y, p.z, a.z)) "
+    "local d = 0 pcall(function() if player.human:IsWeaponDrawn() then d = 1 end end) "
+    "System.SetCVar('cl_serveraddr', string.format('P %.2f %.2f %.2f %.3f %d', p.x, p.y, p.z, a.z, d)) "
     "else System.SetCVar('cl_serveraddr', 'noplayer') end";
 
 // Game-side half (puppet NPC, Henry look, animation, CoopSetRemote) lives in lua/coop_core.lua,
@@ -204,6 +205,13 @@ static int read_worn(unsigned long long *out, int max) {
         out[c++] = *(unsigned long long *)((unsigned char *)node + 0x10);
         node = (void **)node[0];
     }
+    // weapon slots: 12 WUIDs at handler+0x50 (up to the counter at +0xB0); empty = global at +0x300F8D8
+    unsigned long long empty = *(unsigned long long *)(g_base + 0x300F8D8);
+    if (readable(h + 0x50, 12 * 8))
+        for (int i = 0; i < 12 && c < max; i++) {
+            unsigned long long v = *(unsigned long long *)(h + 0x50 + i * 8);
+            if (v && v != empty) out[c++] = v;
+        }
     return c;
 }
 
@@ -285,6 +293,7 @@ static DWORD WINAPI worker(LPVOID unused) {
     float px = 0, py = 0, pz = 0;              // previous received position (for speed)
     float sx = 0, sy = 0, sz = 0, sr = 0;      // smoothed state shown on the puppet
     float speed = 0;
+    int tdrawn = 0;
     char cmdfile[32];
     snprintf(cmdfile, sizeof(cmdfile), "kcdcoop_cmd_%c.lua", g_role);
     static char myGear[1200] = "", lastWornHex[1200] = "", remoteGear[1200] = "", appliedGear[1200] = "";
@@ -333,7 +342,9 @@ static DWORD WINAPI worker(LPVOID unused) {
                 if (n <= 0) break;
                 buf[n] = 0;
                 float x, y, z, r;
-                if (sscanf(buf, "KCDCOOP1 P %f %f %f %f", &x, &y, &z, &r) == 4) {
+                int dr = 0;
+                if (sscanf(buf, "KCDCOOP1 P %f %f %f %f %d", &x, &y, &z, &r, &dr) >= 4) {
+                    tdrawn = dr ? 1 : 0;
                     DWORD now = GetTickCount();
                     if (haveTarget && now - prevPktTick > 0) {
                         float dx = x - px, dy = y - py;
@@ -377,7 +388,7 @@ static DWORD WINAPI worker(LPVOID unused) {
             }
             if (GetTickCount() - lastRecvTick > 1500) speed = 0;  // remote stopped sending
             char lua[192];
-            snprintf(lua, sizeof(lua), "CoopSetRemote(%.3f, %.3f, %.3f, %.4f, %.2f)", sx, sy, sz, sr, speed);
+            snprintf(lua, sizeof(lua), "CoopSetRemote(%.3f, %.3f, %.3f, %.4f, %.2f, %d)", sx, sy, sz, sr, speed, tdrawn);
             run_lua(lua);
         } else if (fake && tick % 3 == 0) {
             run_lua("CoopFakeFollow()");
@@ -463,7 +474,7 @@ BOOL WINAPI DllMain(HINSTANCE h, DWORD reason, LPVOID r) {
         GetModuleFileNameA(NULL, exe, MAX_PATH);
         const char *b = strrchr(exe, '\\'); b = b ? b + 1 : exe;
         if (_stricmp(b, "KingdomCome2.exe") == 0) g_role = 'B';
-        coop_log("kcdcoop loader v3.4 attached (%s)", b);
+        coop_log("kcdcoop loader v3.5 attached (%s)", b);
         HANDLE t = CreateThread(NULL, 0, worker, NULL, 0, NULL);
         if (t) CloseHandle(t);
     }
