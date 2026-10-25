@@ -69,6 +69,12 @@ function CoopReportWorn(hexlist)
   System.SetCVar('sv_servername', 'G ' .. table.concat(classes, ','))
 end
 
+function CoopInvSet(ent)
+  local t = {}
+  for k, v in pairs(ent.inventory:GetInventoryTable() or {}) do t[tostring(v)] = v end
+  return t
+end
+
 function CoopDressRemote(list)
   CoopGearLast = list
   local e = CoopP
@@ -83,11 +89,17 @@ function CoopDressRemote(list)
   pcall(function() e.soul:OverrideHair(CoopLook.hair) end)
   local n = 0
   for cls in string.gmatch(list, '[^,]+') do
-    local okc, id = pcall(function() return e.inventory:CreateItem(cls, 1, 1) end)
-    if okc and id then
-      pcall(function() e.actor:EquipInventoryItem(id) end)
-      CoopGearItems[#CoopGearItems + 1] = id
+    local before = CoopInvSet(e)
+    pcall(function() e.inventory:CreateItem(cls, 1, 1) end)
+    local newid = nil
+    for k, v in pairs(CoopInvSet(e)) do if not before[k] then newid = v end end
+    if newid then
+      local oke, er = pcall(function() e.actor:EquipInventoryItem(newid) end)
+      if not oke then System.LogAlways('[coop] equip failed: ' .. tostring(er)) end
+      CoopGearItems[#CoopGearItems + 1] = newid
       n = n + 1
+    else
+      System.LogAlways('[coop] could not create item ' .. cls)
     end
   end
   System.LogAlways('[coop] dressed remote with ' .. n .. ' items')
@@ -127,5 +139,5 @@ function CoopFakeFollow()
   CoopSetRemote(p.x + 2, p.y, p.z, a.z, 0)
 end
 
-CoopCoreVersion = 2
-System.LogAlways('[coop] core v2 defined')
+CoopCoreVersion = 3
+System.LogAlways('[coop] core v3 defined')
