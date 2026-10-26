@@ -125,8 +125,11 @@ function CoopAnimate(e, spd)
 end
 
 CoopCombatAnims = {
-  stance = 'combat_rg_z0_idle01_lngsw',
+  stance = 'combat_%s_z0_idle01_lngsw',
   attack = '1d-combat_%s_z%d_natksw_lngsw',
+  block = '1d-combat_%s_z%d_nblksw_lngsw',
+  hit = 'combat_%s_z%d_hitst_z5_lngsw',
+  dodge = 'combat_%s_z0_dodge_back_lngsw',
 }
 
 function CoopNow()
@@ -135,17 +138,39 @@ function CoopNow()
   return t
 end
 
+function CoopPlayOnce(e, name, blend)
+  local len = 0
+  pcall(function() len = e:GetAnimationLength(0, name) end)
+  if not len or len <= 0 then return 0 end
+  e:StartAnimation(0, name, 0, blend or 0.1, 1.0, false)
+  CoopAnimCur = name
+  return len
+end
+
 function CoopCombat(e, cstate)
   local now = CoopNow()
-  if cstate == 2 and CoopCombatPrev ~= 2 then
-    CoopAtkSide = (CoopAtkSide == 'rg') and 'lg' or 'rg'
-    local name = string.format(CoopCombatAnims.attack, CoopAtkSide, math.random(0, 4))
-    e:StartAnimation(0, name, 0, 0.1, 1.0, false)
-    CoopAttackUntil = now + 0.9
-    CoopAnimCur = name
-  elseif (now >= (CoopAttackUntil or 0)) and CoopAnimCur ~= CoopCombatAnims.stance then
-    e:StartAnimation(0, CoopCombatAnims.stance, 0, 0.25, 1.0, true)
-    CoopAnimCur = CoopCombatAnims.stance
+  CoopGuard = CoopGuard or 'rg'
+  local busy = now < (CoopBusyUntil or 0)
+  local fresh = cstate ~= CoopCombatPrev
+  local len = 0
+  if cstate == 2 and (fresh or not busy) then
+    CoopGuard = (CoopGuard == 'rg') and 'lg' or 'rg'
+    len = CoopPlayOnce(e, string.format(CoopCombatAnims.attack, CoopGuard, math.random(0, 4)), 0.08)
+  elseif cstate == 4 and fresh then
+    len = CoopPlayOnce(e, string.format(CoopCombatAnims.block, CoopGuard, math.random(0, 4)), 0.08)
+  elseif cstate == 5 and fresh then
+    len = CoopPlayOnce(e, string.format(CoopCombatAnims.hit, CoopGuard, math.random(0, 2)), 0.05)
+  elseif cstate == 6 and fresh then
+    len = CoopPlayOnce(e, string.format(CoopCombatAnims.dodge, CoopGuard), 0.08)
+  end
+  if len > 0 then
+    CoopBusyUntil = now + len * 0.85
+  elseif not busy then
+    local st = string.format(CoopCombatAnims.stance, CoopGuard)
+    if CoopAnimCur ~= st then
+      e:StartAnimation(0, st, 0, 0.25, 1.0, true)
+      CoopAnimCur = st
+    end
   end
   CoopCombatPrev = cstate
 end
@@ -178,5 +203,5 @@ function CoopFakeFollow()
   CoopSetRemote(p.x + 2, p.y, p.z, a.z, 0)
 end
 
-CoopCoreVersion = 5
-System.LogAlways('[coop] core v5 defined')
+CoopCoreVersion = 6
+System.LogAlways('[coop] core v6 defined')
