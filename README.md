@@ -23,7 +23,9 @@ QA level: manual (owner-observed, loader logs). No automated tests yet.
 
 ## What doesn't (yet)
 
-- Shared: position, facing, walk/run state, worn gear, carried weapons and drawn/holstered. No attacks, enemies, NPCs, quests or story.
+- Shared: position, facing, walk/run state, worn gear, carried weapons, drawn/holstered, and an approximate
+  combat stance + sword swing when the other player attacks in a real fight (direction is guessed).
+  No real hit directions, blocks, shared enemies, quests or story.
 - Direct UDP only (same PC or LAN, or port forwarding). Steam relay is planned.
 - Only one game build is supported (below). The loader checks every address and does nothing on a mismatch.
 
