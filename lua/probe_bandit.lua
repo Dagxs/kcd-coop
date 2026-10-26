@@ -2,7 +2,7 @@ local ok, er = pcall(function()
   local L = function(s) System.LogAlways('[coopprobe] ' .. s) end
   local n = 0
   for _, e in ipairs(System.GetEntitiesByClass('NPC') or {}) do
-    if e:GetName() == 'SpawnedEnemy_01' then
+    if string.find(e:GetName(), 'Bandit') or e:GetName() == 'SpawnedEnemy_01' then
       n = n + 1
       local q = e:GetWorldPos()
       local hp, st, hid = '?', '?', '?'

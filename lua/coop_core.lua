@@ -439,7 +439,11 @@ function CoopRecv(payload)
     local f = {}
     for v in string.gmatch(msg, '[^;]+') do f[#f + 1] = v end
     if f[1] == 'E' and not CoopIsHost() then
-      pcall(CoopEnemyApply, f)
+      local oka, era = pcall(CoopEnemyApply, f)
+      if not oka then
+        CoopApplyErr = (CoopApplyErr or 0) + 1
+        if CoopApplyErr < 6 then System.LogAlways('[coop] enemy apply error: ' .. tostring(era)) end
+      end
     elseif f[1] == 'D' and CoopIsHost() then
       local e = System.GetEntityByName(f[2] or '')
       local amt = tonumber(f[3] or '')
