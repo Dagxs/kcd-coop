@@ -124,7 +124,33 @@ function CoopAnimate(e, spd)
   end
 end
 
-function CoopSetRemote(x, y, z, rz, spd, drawn)
+CoopCombatAnims = {
+  stance = 'combat_rg_z0_idle01_lngsw',
+  attack = '1d-combat_%s_z%d_natksw_lngsw',
+}
+
+function CoopNow()
+  local t = 0
+  pcall(function() t = System.GetCurrTime() end)
+  return t
+end
+
+function CoopCombat(e, cstate)
+  local now = CoopNow()
+  if cstate == 2 and CoopCombatPrev ~= 2 then
+    CoopAtkSide = (CoopAtkSide == 'rg') and 'lg' or 'rg'
+    local name = string.format(CoopCombatAnims.attack, CoopAtkSide, math.random(0, 4))
+    e:StartAnimation(0, name, 0, 0.1, 1.0, false)
+    CoopAttackUntil = now + 0.9
+    CoopAnimCur = name
+  elseif (now >= (CoopAttackUntil or 0)) and CoopAnimCur ~= CoopCombatAnims.stance then
+    e:StartAnimation(0, CoopCombatAnims.stance, 0, 0.25, 1.0, true)
+    CoopAnimCur = CoopCombatAnims.stance
+  end
+  CoopCombatPrev = cstate
+end
+
+function CoopSetRemote(x, y, z, rz, spd, drawn, cstate)
   local e = CoopEnsurePuppet(x, y, z)
   if not e then return end
   e:SetWorldPos({x = x, y = y, z = z})
@@ -137,7 +163,12 @@ function CoopSetRemote(x, y, z, rz, spd, drawn)
     end)
     System.LogAlways('[coop] remote weapon ' .. (drawn == 1 and 'drawn' or 'holstered') .. ' ok=' .. tostring(okd) .. (okd and '' or (' ' .. tostring(er))))
   end
-  if drawn ~= 1 then pcall(CoopAnimate, e, spd or 0) end
+  if drawn == 1 then
+    if cstate and cstate > 0 then pcall(CoopCombat, e, cstate) end
+  else
+    CoopCombatPrev = 0
+    pcall(CoopAnimate, e, spd or 0)
+  end
 end
 
 function CoopFakeFollow()
@@ -147,5 +178,5 @@ function CoopFakeFollow()
   CoopSetRemote(p.x + 2, p.y, p.z, a.z, 0)
 end
 
-CoopCoreVersion = 4
-System.LogAlways('[coop] core v4 defined')
+CoopCoreVersion = 5
+System.LogAlways('[coop] core v5 defined')

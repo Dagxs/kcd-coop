@@ -1,7 +1,7 @@
 // KCD1 co-op loader (coop-anything). Proxy dinput8.dll placed next to KingdomCome.exe in a TEST COPY.
 // Build target: KCD 1.9.8 Steam, WHGame.dll SHA-256 cf9f6dc384edcf35c20647a912745ddb8adb5ba65953e329c24e89dd9c4381aa
 //
-// v3.5: script bridge + puppet + UDP position sync between two games.
+// v3.6: script bridge + puppet + UDP position sync between two games.
 //  - DLL -> game: CXConsole::ExecuteString(cmd, silent, defer=true) with "#<lua>" commands
 //    (deferred, so the game runs them on its main thread next frame).
 //  - game -> DLL: Lua writes a string into a console variable; DLL reads it via ICVar::GetString.
@@ -135,7 +135,9 @@ static void run_lua(const char *lua) {  // deferred: executes on the game's main
 static const char *kPublishLua =
     "if player then local p=player:GetWorldPos(); local a=player:GetWorldAngles(); "
     "local d = 0 pcall(function() if player.human:IsWeaponDrawn() then d = 1 end end) "
-    "System.SetCVar('cl_serveraddr', string.format('P %.2f %.2f %.2f %.3f %d', p.x, p.y, p.z, a.z, d)) "
+    "local c = 0 pcall(function() local st = tostring(player.actor:GetCurrentAnimationState()) "
+    "if st == 'CombatIdle' then c = 1 elseif st == 'CombatAttack' then c = 2 elseif st == 'CombatMovement' then c = 3 end end) "
+    "System.SetCVar('cl_serveraddr', string.format('P %.2f %.2f %.2f %.3f %d %d', p.x, p.y, p.z, a.z, d, c)) "
     "else System.SetCVar('cl_serveraddr', 'noplayer') end";
 
 // Game-side half (puppet NPC, Henry look, animation, CoopSetRemote) lives in lua/coop_core.lua,
@@ -293,7 +295,7 @@ static DWORD WINAPI worker(LPVOID unused) {
     float px = 0, py = 0, pz = 0;              // previous received position (for speed)
     float sx = 0, sy = 0, sz = 0, sr = 0;      // smoothed state shown on the puppet
     float speed = 0;
-    int tdrawn = 0;
+    int tdrawn = 0, tcombat = 0;
     char cmdfile[32];
     snprintf(cmdfile, sizeof(cmdfile), "kcdcoop_cmd_%c.lua", g_role);
     static char myGear[1200] = "", lastWornHex[1200] = "", remoteGear[1200] = "", appliedGear[1200] = "";
@@ -342,9 +344,10 @@ static DWORD WINAPI worker(LPVOID unused) {
                 if (n <= 0) break;
                 buf[n] = 0;
                 float x, y, z, r;
-                int dr = 0;
-                if (sscanf(buf, "KCDCOOP1 P %f %f %f %f %d", &x, &y, &z, &r, &dr) >= 4) {
+                int dr = 0, cs = 0;
+                if (sscanf(buf, "KCDCOOP1 P %f %f %f %f %d %d", &x, &y, &z, &r, &dr, &cs) >= 4) {
                     tdrawn = dr ? 1 : 0;
+                    tcombat = (cs >= 0 && cs <= 3) ? cs : 0;
                     DWORD now = GetTickCount();
                     if (haveTarget && now - prevPktTick > 0) {
                         float dx = x - px, dy = y - py;
@@ -388,7 +391,7 @@ static DWORD WINAPI worker(LPVOID unused) {
             }
             if (GetTickCount() - lastRecvTick > 1500) speed = 0;  // remote stopped sending
             char lua[192];
-            snprintf(lua, sizeof(lua), "CoopSetRemote(%.3f, %.3f, %.3f, %.4f, %.2f, %d)", sx, sy, sz, sr, speed, tdrawn);
+            snprintf(lua, sizeof(lua), "CoopSetRemote(%.3f, %.3f, %.3f, %.4f, %.2f, %d, %d)", sx, sy, sz, sr, speed, tdrawn, tcombat);
             run_lua(lua);
         } else if (fake && tick % 3 == 0) {
             run_lua("CoopFakeFollow()");
@@ -474,7 +477,7 @@ BOOL WINAPI DllMain(HINSTANCE h, DWORD reason, LPVOID r) {
         GetModuleFileNameA(NULL, exe, MAX_PATH);
         const char *b = strrchr(exe, '\\'); b = b ? b + 1 : exe;
         if (_stricmp(b, "KingdomCome2.exe") == 0) g_role = 'B';
-        coop_log("kcdcoop loader v3.5 attached (%s)", b);
+        coop_log("kcdcoop loader v3.6 attached (%s)", b);
         HANDLE t = CreateThread(NULL, 0, worker, NULL, 0, NULL);
         if (t) CloseHandle(t);
     }
