@@ -261,19 +261,31 @@ function CoopStateCode(e)
   return c
 end
 
-function CoopHostEnemies()
-  local now = CoopNow()
+function CoopHostPick(now)
   local centers = {player:GetWorldPos()}
   if CoopP and System.GetEntity(CoopP.id) then centers[#centers + 1] = CoopP:GetWorldPos() end
-  local pick = {}
+  local pick, cand = {}, {}
   for _, c in ipairs(centers) do
-    for _, e in ipairs(System.GetEntitiesInSphere(c, 35) or {}) do
+    for _, e in ipairs(System.GetEntitiesInSphere(c, 100) or {}) do
       local nm = e.GetName and e:GetName()
-      if nm and not pick[nm] and (CoopEnemyCandidate(e) or (CoopHostSeen[nm] and now - CoopHostSeen[nm] < 4)) then
-        if e.actor and e.human and string.find(nm, 'coop_') ~= 1 then pick[nm] = e end
+      if nm and e.actor and e.human and string.find(nm, 'coop_') ~= 1 and not cand[nm] then
+        local q = e:GetWorldPos()
+        local near = (q.x - c.x) ^ 2 + (q.y - c.y) ^ 2 < 3600
+        local isc = CoopEnemyCandidate(e)
+        local seen = CoopHostSeen[nm] and now - CoopHostSeen[nm] < 4
+        if (isc and (near or seen)) or (seen and not pick[nm]) then
+          pick[nm] = e
+          if isc then cand[nm] = true end
+        end
       end
     end
   end
+  return pick
+end
+
+function CoopHostEnemies()
+  local now = CoopNow()
+  local pick = CoopHostPick(now)
   local n = 0
   for nm, e in pairs(pick) do
     if n < 10 then
@@ -476,5 +488,5 @@ function CoopFakeFollow()
   CoopSetRemote(p.x + 2, p.y, p.z, a.z, 0)
 end
 
-CoopCoreVersion = 7
-System.LogAlways('[coop] core v7 defined')
+CoopCoreVersion = 8
+System.LogAlways('[coop] core v8 defined')
