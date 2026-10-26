@@ -462,9 +462,36 @@ function CoopRecv(payload)
   end
 end
 
+function CoopDebug()
+  local now = CoopNow()
+  if now - (CoopLastDbg or 0) < 2 then return end
+  CoopLastDbg = now
+  local hp = '?'
+  pcall(function() hp = CoopNum(player.actor:GetHealth()) end)
+  local s = 'role=' .. tostring(CoopRole) .. ' myhp=' .. hp .. ' queue=' .. #CoopOut
+  if CoopIsHost() then
+    local okp, pick = pcall(CoopHostPick, now)
+    if okp then
+      for nm, e in pairs(pick) do
+        local h = '?'
+        pcall(function() h = CoopNum(e.actor:GetHealth()) end)
+        s = s .. ' | ' .. nm .. ' hp=' .. h .. ' c=' .. CoopStateCode(e) .. ' cand=' .. tostring(CoopEnemyCandidate(e))
+      end
+    else s = s .. ' pick error ' .. tostring(pick) end
+  else
+    for nm, st in pairs(CoopEn) do
+      local h = '?'
+      pcall(function() h = CoopNum(st.e.actor:GetHealth()) end)
+      s = s .. ' | ' .. nm .. ' host=' .. CoopNum(st.hhp) .. ' exp=' .. CoopNum(st.exp) .. ' local=' .. h .. ' c=' .. tostring(st.cs) .. ' age=' .. CoopNum(now - (st.t or now))
+    end
+  end
+  System.LogAlways('[coopdbg] ' .. s)
+end
+
 function CoopTick()
   if not player then return end
   local now = CoopNow()
+  pcall(CoopDebug)
   CoopStandinHurt()
   if CoopIsHost() then
     if now - (CoopLastHost or 0) > 0.095 then
@@ -505,5 +532,5 @@ function CoopFakeFollow()
   CoopSetRemote(p.x + 2, p.y, p.z, a.z, 0)
 end
 
-CoopCoreVersion = 10
-System.LogAlways('[coop] core v10 defined')
+CoopCoreVersion = 11
+System.LogAlways('[coop] core v11 defined')
