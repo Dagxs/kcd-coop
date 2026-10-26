@@ -1,7 +1,7 @@
 // KCD1 co-op loader (coop-anything). Proxy dinput8.dll placed next to KingdomCome.exe in a TEST COPY.
 // Build target: KCD 1.9.8 Steam, WHGame.dll SHA-256 cf9f6dc384edcf35c20647a912745ddb8adb5ba65953e329c24e89dd9c4381aa
 //
-// v3.7: script bridge + puppet + UDP position sync between two games.
+// v3.8: script bridge + puppet + UDP position sync between two games.
 //  - DLL -> game: CXConsole::ExecuteString(cmd, silent, defer=true) with "#<lua>" commands
 //    (deferred, so the game runs them on its main thread next frame).
 //  - game -> DLL: Lua writes a string into a console variable; DLL reads it via ICVar::GetString.
@@ -147,7 +147,20 @@ static const char *kPublishLua =
 // embedded at build time as kCoreLua. It only defines what is missing, so it is safe to re-run.
 #include "coop_core_lua.h"
 static void run_lua(const char *lua);
-static void run_core(void) { for (int i = 0; i < CORE_LUA_CHUNKS; i++) run_lua(kCoreLua[i]); }
+static void run_core(void) {
+    for (int i = 0; i < CORE_LUA_CHUNKS; i++) run_lua(kCoreLua[i]);
+    run_lua(g_role == 'B' ? "CoopRole = 'B'" : "CoopRole = 'A'");  // A is the host for shared enemies
+}
+
+// Messages from the peer go into Lua as a quoted string: allow only a safe character set.
+static int msg_safe(const char *m) {
+    for (; *m; m++) {
+        char c = *m;
+        if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+              c == '_' || c == '.' || c == ';' || c == '|' || c == ',' || c == '-')) return 0;
+    }
+    return 1;
+}
 
 // ---------------- gear (v3.4) ----------------
 // The engine's internal equip routine (C_ActorEquipmentHandler-like object in rcx, item WUID in rdx).
@@ -303,6 +316,8 @@ static DWORD WINAPI worker(LPVOID unused) {
     snprintf(cmdfile, sizeof(cmdfile), "kcdcoop_cmd_%c.lua", g_role);
     static char myGear[1200] = "", lastWornHex[1200] = "", remoteGear[1200] = "", appliedGear[1200] = "";
     int haveMyGear = 0, probes = 0;
+    unsigned outSeq = 1, outWaitTicks = 0; int outWaiting = 0;
+    unsigned long outMsgs = 0, inMsgs = 0;
 
     for (int tick = 0;; tick++) {
         Sleep(33);
@@ -339,6 +354,32 @@ static DWORD WINAPI worker(LPVOID unused) {
             }
         }
 
+        // 1b) outbox (v3.8): Lua CoopFlush(seq) runs the co-op tick (shared enemies, damage relay) and puts
+        // queued messages into sv_password as "<seq>|msg|msg". Handshake on seq so no batch is lost.
+        if (s != INVALID_SOCKET) {
+            if (outWaiting) {
+                void *ov = cvar("sv_password");
+                const char *v = ov ? cvar_str(ov) : NULL;
+                unsigned got = 0;
+                if (v && sscanf(v, "%u|", &got) == 1 && got == outSeq) {
+                    const char *bar = strchr(v, '|');
+                    if (bar && bar[1]) {
+                        static char pkt[1400];
+                        int n = snprintf(pkt, sizeof(pkt), "KCDCOOP1 M %s", bar + 1);
+                        if (n > 0 && n < (int)sizeof(pkt)) { sendto(s, pkt, n, 0, (struct sockaddr *)&peer, sizeof(peer)); outMsgs++; }
+                    }
+                    outSeq++;
+                    outWaiting = 0;
+                } else if (++outWaitTicks > 90) outWaiting = 0;  // e.g. during a level load: ask again
+            }
+            if (!outWaiting) {
+                char lua[48];
+                snprintf(lua, sizeof(lua), "CoopFlush(%u)", outSeq);
+                run_lua(lua);
+                outWaiting = 1; outWaitTicks = 0;
+            }
+        }
+
         // 2) drain incoming packets, keep the newest valid one
         if (s != INVALID_SOCKET) {
             static char buf[1400];
@@ -361,6 +402,13 @@ static DWORD WINAPI worker(LPVOID unused) {
                     tx = x; ty = y; tz = z; tr = r; haveTarget = 1; recvd++;
                     lastRecvTick = now;
                     strncpy(lastRemote, buf + 9, sizeof(lastRemote) - 1);
+                } else if (strncmp(buf, "KCDCOOP1 M ", 11) == 0) {
+                    if (msg_safe(buf + 11)) {
+                        static char lua[1500];
+                        snprintf(lua, sizeof(lua), "CoopRecv('%s')", buf + 11);
+                        run_lua(lua);
+                        inMsgs++;
+                    } else bad++;
                 } else if (strncmp(buf, "KCDCOOP1 G", 10) == 0) {
                     const char *g = buf + 10;
                     if (*g == ' ') g++;
@@ -449,7 +497,7 @@ static DWORD WINAPI worker(LPVOID unused) {
         }
 
         if (tick % 150 == 0)
-            coop_log("net: sent=%lu recv=%lu bad=%lu cmds=%lu speed=%.2f remote=%s", sent, recvd, bad, cmds, speed,
+            coop_log("net: sent=%lu recv=%lu bad=%lu cmds=%lu msgs out=%lu in=%lu speed=%.2f remote=%s", sent, recvd, bad, cmds, outMsgs, inMsgs, speed,
                  lastRemote[0] ? lastRemote : "-");
     }
 }
@@ -480,7 +528,7 @@ BOOL WINAPI DllMain(HINSTANCE h, DWORD reason, LPVOID r) {
         GetModuleFileNameA(NULL, exe, MAX_PATH);
         const char *b = strrchr(exe, '\\'); b = b ? b + 1 : exe;
         if (_stricmp(b, "KingdomCome2.exe") == 0) g_role = 'B';
-        coop_log("kcdcoop loader v3.7 attached (%s)", b);
+        coop_log("kcdcoop loader v3.8 attached (%s)", b);
         HANDLE t = CreateThread(NULL, 0, worker, NULL, 0, NULL);
         if (t) CloseHandle(t);
     }
