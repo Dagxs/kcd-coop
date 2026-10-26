@@ -44,7 +44,7 @@ proxy.hp = 70
 for i in range(3): cycle(30 + i)
 check(bandit.hp < 75, f"host bandit took the client's damage (hp={bandit.hp})")
 # host stand-in got hit: client player takes damage
-A.execute("CoopEnsurePuppet(2,0,0)"); A.eval("CoopP").hp = 85
+A.execute("CoopEnsurePuppet(2,0,0)"); cycle(39); A.eval("CoopP").hp = 85
 for i in range(2): cycle(40 + i)
 check(pb.hp < 90, f"client player took the stand-in's damage (hp={pb.hp})")
 # bandit dies on host
@@ -55,5 +55,12 @@ check(B.eval("CoopEn['SpawnedEnemy_01'] and CoopEn['SpawnedEnemy_01'].dead") is 
 A.eval("System.RemoveEntity")(bandit.id)
 for i in range(40): cycle(60 + i)
 check(B.eval("CoopEn['SpawnedEnemy_01']") is None, "proxy entry released when host stops sending")
+# stand-in whose SetHealth does nothing: one hit must relay once, not every tick
+A.execute("CoopEnsurePuppet(2,0,0)"); sp = A.eval("CoopP")
+A.execute("CoopP.actor.SetHealth = function() end")
+before = pb.hp
+sp.hp = sp.hp - 10
+for i in range(10): cycle(200 + i)
+check(abs((before - pb.hp) - 10) < 0.01, f"one 10-point hit relayed exactly once (lost {before - pb.hp})")
 print("FAILED" if fails else "ALL PASSED", len(fails))
 sys.exit(1 if fails else 0)

@@ -18,7 +18,7 @@ CoopAnimSet = {
 function CoopFindPuppet()
   local keep = nil
   for _, e in ipairs(System.GetEntitiesByClass('NPC') or {}) do
-    if e:GetName() == 'coop_remote_henry' then
+    if e:GetName() == 'coop_remote_henry' and not (CoopDeadIds and CoopDeadIds[tostring(e.id)]) then
       if not keep then keep = e else System.RemoveEntity(e.id) System.LogAlways('[coop] removed duplicate stand-in') end
     end
   end
@@ -153,7 +153,10 @@ CoopCombatAnims = {
 function CoopNow()
   local t = 0
   pcall(function() t = System.GetCurrTime() end)
-  return t
+  local last = CoopRawLast or t
+  if t < last then CoopTimeOfs = (CoopTimeOfs or 0) + (last - t) end
+  CoopRawLast = t
+  return t + (CoopTimeOfs or 0)
 end
 
 function CoopPlayOnce(e, name, blend, st)
@@ -320,10 +323,20 @@ function CoopStandinHurt()
   if not CoopP or not System.GetEntity(CoopP.id) then return end
   local hp = 100
   pcall(function() hp = CoopP.actor:GetHealth() end)
-  if hp < 99.5 then
-    CoopSend('H;' .. CoopNum(100 - hp))
-    pcall(function() CoopP.actor:SetHealth(100) end)
-    System.LogAlways('[coop] stand-in took ' .. CoopNum(100 - hp) .. ' damage, relayed')
+  if CoopPHpEnt ~= CoopP.id then CoopPHpEnt = CoopP.id CoopPHp = hp end
+  if hp < CoopPHp - 0.5 then
+    CoopSend('H;' .. CoopNum(CoopPHp - hp))
+    System.LogAlways('[coop] stand-in took ' .. CoopNum(CoopPHp - hp) .. ' damage, relayed')
+  end
+  pcall(function() CoopP.actor:SetHealth(100) end)
+  pcall(function() hp = CoopP.actor:GetHealth() end)
+  CoopPHp = hp
+  if hp < 25 then
+    CoopDeadIds = CoopDeadIds or {}
+    CoopDeadIds[tostring(CoopP.id)] = true
+    System.RemoveEntity(CoopP.id)
+    CoopP = nil
+    System.LogAlways('[coop] stand-in was badly hurt, respawning it')
   end
 end
 
@@ -488,5 +501,5 @@ function CoopFakeFollow()
   CoopSetRemote(p.x + 2, p.y, p.z, a.z, 0)
 end
 
-CoopCoreVersion = 8
-System.LogAlways('[coop] core v8 defined')
+CoopCoreVersion = 10
+System.LogAlways('[coop] core v10 defined')
